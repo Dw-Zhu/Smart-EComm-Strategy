@@ -45,8 +45,21 @@ def train_user_clusters(n_clusters=4):
         # 3. 计算业务指标
         # 社交影响力
         df['social_influence'] = (df['fans_num'] * 0.7 + df['follow_num'] * 0.3).clip(0, 100)
-        # 消费等级
-        df['consumption_level'] = pd.qcut(df['total_spend'], 3, labels=["低消费", "中消费", "高消费"])
+
+        # --- 方案3：基于 K-Means 的动态消费等级划分 ---
+        # 提取消费总额进行一维聚类
+        spend_data = df[['total_spend']].values
+        # 即使整体聚类是4类，消费等级我们通常还是划分为3类（低/中/高）
+        spend_kmeans = KMeans(n_clusters=3, random_state=42, n_init=10)
+        df['spend_cluster'] = spend_kmeans.fit_predict(spend_data)
+
+        # 【重要】重排序：确保聚类中心均值小的标记为"低消费"，大的为"高消费"
+        # 否则 KMeans 随机生成的 0,1,2 标签并不代表金额大小
+        centers = df.groupby('spend_cluster')['total_spend'].mean().sort_values().index
+        spend_mapping = {centers[0]: "低消费", centers[1]: "中消费", centers[2]: "高消费"}
+        df['consumption_level'] = df['spend_cluster'].map(spend_mapping)
+        # ------------------------------------------
+
         # 核心偏好品类
         pref_cat = raw_df.groupby(['user_id', 'category']).size().reset_index(name='cnt')
         df['preferred_category'] = pref_cat.sort_values('cnt', ascending=False).groupby('user_id')[
@@ -60,7 +73,7 @@ def train_user_clusters(n_clusters=4):
         # 活跃度标签
         df['activity_level'] = df['interaction_rate'].apply(lambda x: "活跃" if x > 10 else "沉睡")
 
-        # 4. 执行 K-means 聚类
+        # 4. 执行多维度综合 K-means 聚类（用于生成最终画像标签）
         scaler = StandardScaler()
         cluster_feats = ['total_spend', 'purchase_freq', 'interaction_rate', 'purchase_intent']
         scaled = scaler.fit_transform(df[cluster_feats])
