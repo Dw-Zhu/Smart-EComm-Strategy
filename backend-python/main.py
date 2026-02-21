@@ -12,6 +12,9 @@ from src.profiling.cluster_model import train_user_clusters
 # 确保 rf_ranker.py 已经改成了我刚才给你的多进程版本
 from src.recommendation.rf_ranker import train_recommendation_model, get_top_recommendations
 
+# 导入基准模型
+from src.recommendation.baseline_user_cf import UserCFBaseline
+
 from sqlalchemy import text
 from src.database import engine
 
@@ -80,7 +83,7 @@ async def analyze_persona():
         raise HTTPException(status_code=500, detail=msg)
 
 
-# --- 核心修改：异步训练任务包装函数 ---
+# ---异步训练任务包装函数 ---
 def run_training_wrapper():
     """后台运行的包装函数，用于更新全局状态"""
     global training_status
@@ -114,9 +117,6 @@ async def get_train_status():
     新增：供前端轮询训练状态
     """
     return training_status
-
-
-# --- 后续接口保持不变 ---
 
 @app.get("/api/recommend/{user_id}")
 async def recommend(user_id: str):
