@@ -18,13 +18,21 @@
           <el-icon><TrendCharts /></el-icon>
           <span>策略推荐引擎</span>
         </el-menu-item>
+        <el-menu-item index="4">
+          <el-icon><Histogram /></el-icon>
+          <span>模型对比评估</span>
+        </el-menu-item>
       </el-menu>
     </el-aside>
 
     <el-container class="main-container">
       <el-header class="header">
         <div class="breadcrumb">
-          {{ activeMenu === '1' ? '数据管理 / 原始数据上传' : activeMenu === '2' ? '可视化 / 智慧画像看板' : '模型 / 策略推荐引擎' }}
+          {{
+            activeMenu === '1' ? '数据管理 / 原始数据上传' :
+            activeMenu === '2' ? '可视化 / 智慧画像看板' :
+            activeMenu === '3' ? '模型 / 策略推荐引擎' : '评测 / 模型对比评估'
+          }}
         </div>
         <div class="user-status">
           <el-tag :type="isProfiled ? 'success' : 'info'">
@@ -112,6 +120,9 @@
         <div v-else-if="activeMenu === '3'">
           <RecommendationEngine />
         </div>
+        <div v-else-if="activeMenu === '4'">
+          <ModelEvaluation />
+        </div>
       </el-main>
     </el-container>
   </el-container>
@@ -122,7 +133,12 @@ import { ref, onMounted } from 'vue' // 引入 onMounted
 import { ElMessage } from 'element-plus'
 import axios from 'axios'
 import UserProfiling from './components/UserProfiling.vue'
-import RecommendationEngine from './components/RecommendationEngine.vue' //
+import RecommendationEngine from './components/RecommendationEngine.vue'
+import ModelEvaluation from "./components/ModelEvaluation.vue";
+import {
+  Platform, Upload, UserFilled, TrendCharts,
+  DocumentAdd, UploadFilled, Histogram // 新增 Histogram
+} from '@element-plus/icons-vue'
 
 // 响应式状态定义
 const activeMenu = ref('1')

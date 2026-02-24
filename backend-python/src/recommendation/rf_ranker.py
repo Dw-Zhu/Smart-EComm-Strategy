@@ -8,138 +8,174 @@ import numpy as np
 import gc
 from concurrent.futures import ProcessPoolExecutor
 
+# 全局共享变量，减少子进程序列化开销
+_shared_data = {}
 
-def _predict_user_batch(user_batch, all_items, feature_names):
+
+def _init_worker(behavior_summary, user_cat_affinity, all_items_prepped, feature_names):
     """
-    子进程执行函数：超小规模批处理以保护内存
+    子进程初始化：加载预处理好的特征数据
     """
+    global _shared_data
+    _shared_data['behavior_summary'] = behavior_summary
+    _shared_data['user_cat_affinity'] = user_cat_affinity
+    _shared_data['all_items_prepped'] = all_items_prepped
+    _shared_data['feature_names'] = feature_names
+    # 预加载模型到内存
+    _shared_data['model'] = joblib.load('libs/rf_model.pkl')
+
+
+def _predict_user_batch_extreme_precision(user_batch, top_n=5, threshold=0.6):
+    """
+    高性能预测函数：剔除重复的独热编码逻辑
+    """
+    global _shared_data
     try:
-        import joblib
-        import gc
-        if not isinstance(user_batch, pd.DataFrame):
-            user_batch = pd.DataFrame(user_batch)
+        rf = _shared_data['model']
+        # all_items_prepped 已经是包含 dummy 变量的完整商品表
+        all_items = _shared_data['all_items_prepped']
+        behavior_summary = _shared_data['behavior_summary']
+        user_cat_affinity = _shared_data['user_cat_affinity']
+        feature_names = _shared_data['feature_names']
 
-        model_path = 'libs/rf_model.pkl'
-        if not os.path.exists(model_path):
-            return pd.DataFrame()
-
-        rf = joblib.load(model_path)
-
-        # 批量处理：避免一次性生成过大的笛卡尔积表
+        # 1. 构造候选集 (笛卡尔积) - 优化点：利用预编码数据
         combined = user_batch.assign(key=1).merge(all_items.assign(key=1), on='key').drop('key', axis=1)
-        combined_encoded = pd.get_dummies(combined, columns=['category'])
 
+        # 2. 快速合并交互特征与偏好特征
+        combined = combined.merge(behavior_summary, on=['user_id', 'item_id'], how='left')
+        combined = combined.merge(user_cat_affinity, on=['user_id', 'category'], how='left')
+
+        # 3. 快速填充缺失值
+        fill_cols = ['pv_count', 'add2cart', 'collect_num', 'like_num', 'cat_pref_score']
+        combined[fill_cols] = combined[fill_cols].fillna(0)
+
+        # 4. 特征对齐：补全模型需要的列
         for col in feature_names:
-            if col not in combined_encoded.columns:
-                combined_encoded[col] = 0
+            if col not in combined.columns:
+                combined[col] = 0
 
-        X_pred = combined_encoded[list(feature_names)]
+        # 5. 矩阵化预测
+        X_pred = combined[list(feature_names)]
         combined['score'] = rf.predict_proba(X_pred)[:, 1]
 
-        # 筛选结果并立即释放临时大表
-        result = combined.sort_values(['user_id', 'score'], ascending=[True, False]).groupby('user_id').head(10)
+        # 6. 精准过滤与动态截断
+        result = combined[combined['score'] >= threshold]
+        result = result.sort_values(['user_id', 'score'], ascending=[True, False]).groupby('user_id').head(top_n).copy()
 
-        del combined, combined_encoded, X_pred
-        gc.collect()  # 强制清理子进程内存
+        # 保底逻辑
+        if result.empty:
+            result = combined.sort_values(['user_id', 'score'], ascending=[True, False]).groupby('user_id').head(
+                1).copy()
 
-        return result
+        result['model_type'] = 'RF-Optimized'
+        result['rank'] = result.groupby('user_id').cumcount() + 1
+
+        del combined, X_pred
+        gc.collect()
+        return result[['user_id', 'item_id', 'score', 'model_type', 'category', 'rank']]
     except Exception as e:
-        print(f"子进程异常: {str(e)}")
+        print(f"子进程预测报错: {e}")
         return pd.DataFrame()
 
 
-def train_recommendation_model():
+def train_recommendation_model(top_n=5, threshold=0.6):
     """
-    保守型训练引擎：限制 CPU 和内存占用
+    优化后的主训练与并行预测流程
     """
     try:
-        print("\n" + "=" * 30)
-        print("启动保守型模型训练任务 (限制核心数)...")
+        print("\n" + "========================================")
+        print("🚀 RF-Optimized 高性能精准模式启动")
+        print("⚙️  资源限制: 4 核心并行 (CPU-Bound Optimization)")
+        print(f"📏 策略参数：阈值({threshold}) | Top-{top_n}")
+        print("========================================")
 
-        query = "SELECT b.label, p.cluster_label, p.is_churn_risk, i.price, i.discount_rate, i.has_video, i.category FROM fact_user_behavior b JOIN usr_persona p ON b.user_id = p.user_id JOIN dim_item i ON b.item_id = i.item_id"
+        # 1. 训练数据加载
+        query = """
+                SELECT b.user_id, b.item_id, b.label, i.category,
+                       COALESCE(b.pv_count, 0) as pv_count, COALESCE(b.add2cart, 0) as add2cart, 
+                       COALESCE(b.collect_num, 0) as collect_num, COALESCE(b.like_num, 0) as like_num,
+                       p.cluster_label, p.is_churn_risk, i.price, i.discount_rate, i.has_video
+                FROM fact_user_behavior b
+                JOIN usr_persona p ON b.user_id = p.user_id
+                JOIN dim_item i ON b.item_id = i.item_id
+                """
         df = pd.read_sql(query, engine)
 
-        if df.empty:
-            return False, "数据不足，无法训练。"
+        # 计算类目偏好特征
+        user_cat_affinity = df.groupby(['user_id', 'category']).agg(cat_pref_score=('pv_count', 'sum')).reset_index()
+        df = df.merge(user_cat_affinity, on=['user_id', 'category'], how='left')
 
-        # 训练阶段也限制并行度
-        rf = RandomForestClassifier(n_estimators=30, n_jobs=2, max_depth=8, random_state=42)
-        rf.fit(pd.get_dummies(df.drop('label', axis=1), columns=['category']), df['label'])
+        # 2. 训练逻辑：正则化处理
+        print(">>> 正在拟合随机森林模型 (n_estimators=150, max_depth=15)...")
+        X_train = pd.get_dummies(df.drop(['label', 'user_id', 'item_id'], axis=1), columns=['category'])
+        rf = RandomForestClassifier(
+            n_estimators=150, max_depth=15, min_samples_leaf=10,
+            class_weight='balanced', n_jobs=-1, random_state=42
+        )
+        rf.fit(X_train, df['label'])
 
         if not os.path.exists('libs'): os.makedirs('libs')
         joblib.dump(rf, 'libs/rf_model.pkl')
-
-        # 预测阶段：保守的进程分配
-        all_users = pd.read_sql("SELECT user_id, cluster_label, is_churn_risk FROM usr_persona", engine)
-        all_items = pd.read_sql("SELECT item_id, price, discount_rate, has_video, category FROM dim_item", engine)
         feature_names = rf.feature_names_in_
 
-        # 策略：只开启 2 个并行进程，且分片更细
-        num_workers = 2
-        indices = np.array_split(range(len(all_users)), 20)  # 分成 20 份小块排队
-        user_chunks = [all_users.iloc[idx] for idx in indices]
+        # 3. 【核心优化点】：在主进程预先处理商品特征编码
+        all_users = pd.read_sql("SELECT user_id, cluster_label, is_churn_risk FROM usr_persona", engine)
+        all_items = pd.read_sql("SELECT item_id, price, discount_rate, has_video, category FROM dim_item", engine)
 
-        predictions_to_save = []
+        # 预先生成独热编码，避免子进程重复计算
+        dummies = pd.get_dummies(all_items['category'], prefix='category')
+        all_items_prepped = pd.concat([all_items, dummies], axis=1)
 
-        print(f"模式：低功耗并行。核心数: {num_workers}, 任务分片: 20")
+        behavior_summary = df[['user_id', 'item_id', 'pv_count', 'add2cart', 'collect_num', 'like_num']]
+        active_users = all_users[all_users['user_id'].isin(df['user_id'].unique())]
 
-        with ProcessPoolExecutor(max_workers=num_workers) as executor:
-            futures = [executor.submit(_predict_user_batch, chunk, all_items, feature_names) for chunk in user_chunks]
-            for i, future in enumerate(futures):
-                res_df = future.result()
-                if not res_df.empty:
-                    predictions_to_save.extend(
-                        res_df[['user_id', 'item_id', 'category', 'score']].to_dict(orient='records'))
-                    print(f"进度：已平稳完成 {i + 1}/20...")
-                gc.collect()  # 主进程也进行内存清理
+        # 任务分片
+        user_chunks = np.array_split(active_users, 20)
+        predictions = []
 
-        with engine.begin() as conn:
-            conn.execute(text("DELETE FROM recommendation_results"))
-            insert_sql = text(
-                "INSERT INTO recommendation_results (user_id, item_id, category, score) VALUES (:user_id, :item_id, :category, :score)")
-            conn.execute(insert_sql, predictions_to_save)
+        print(f">>> 开始并行预测，分片数: 20")
+        num_chunks = len(user_chunks)
+        with ProcessPoolExecutor(
+                max_workers=4,
+                initializer=_init_worker,
+                initargs=(behavior_summary, user_cat_affinity, all_items_prepped, feature_names)
+        ) as executor:
+            futures = [executor.submit(_predict_user_batch_extreme_precision, chunk, top_n, threshold) for chunk in
+                       user_chunks]
+            for i, f in enumerate(futures):
+                res = f.result()
+                if not res.empty: predictions.extend(res.to_dict(orient='records'))
+                progress = (i + 1) / num_chunks * 100
+                print(f"📊 预测进度: {progress:.0f}%")
 
-        return True, f"平稳训练完成，生成 {len(predictions_to_save)} 条策略"
+        # 4. 优化后的数据库写入
+        if predictions:
+            res_df = pd.DataFrame(predictions)
+            with engine.begin() as conn:
+                conn.execute(text("DELETE FROM recommendation_results WHERE model_type = 'RF-Optimized'"))
+                # 使用 method='multi' 大幅提升插入速度
+                res_df.to_sql(
+                    'recommendation_results',
+                    con=conn,
+                    if_exists='append',
+                    index=False,
+                    method='multi',
+                    chunksize=2000
+                )
+
+        print(f"✅ 执行完毕。Threshold {threshold}, Top-{top_n}, 共生成 {len(predictions)} 条数据。")
+        return True, "Success"
     except Exception as e:
+        print(f"❌ 运行异常: {e}")
         return False, str(e)
 
 
-
 def get_top_recommendations(user_id, top_n=5):
-    """
-    实时预测：优先读取持久化数据，保证响应速度
-    """
+    """查询接口"""
     try:
-        db_query = f"SELECT item_id, category, score FROM recommendation_results WHERE user_id = '{user_id}' ORDER BY score DESC LIMIT {top_n}"
-        results = pd.read_sql(db_query, engine)
-
-        if not results.empty:
-            return results.to_dict(orient='records')
-
-        # 保底逻辑：若无持久化数据则进行实时计算
-        model_path = 'libs/rf_model.pkl'
-        if not os.path.exists(model_path): return []
-        rf = joblib.load(model_path)
-
-        user_df = pd.read_sql(f"SELECT cluster_label, is_churn_risk FROM usr_persona WHERE user_id = '{user_id}'",
-                              engine)
-        if user_df.empty: return []
-
-        items_df = pd.read_sql("SELECT item_id, price, discount_rate, has_video, category FROM dim_item", engine)
-        predict_df = items_df.copy()
-        predict_df['cluster_label'] = user_df['cluster_label'].values[0]
-        predict_df['is_churn_risk'] = user_df['is_churn_risk'].values[0]
-
-        predict_df_encoded = pd.get_dummies(predict_df, columns=['category'])
-        for col in rf.feature_names_in_:
-            if col not in predict_df_encoded.columns: predict_df_encoded[col] = 0
-
-        X_predict = predict_df_encoded[rf.feature_names_in_]
-        items_df['score'] = rf.predict_proba(X_predict)[:, 1]
-
-        top_items = items_df.sort_values(by='score', ascending=False).head(top_n)
-        return top_items[['item_id', 'category', 'score']].to_dict(orient='records')
-
-    except Exception as e:
-        print(f"推荐预测异常: {str(e)}")
+        db_query = text(
+            "SELECT item_id, category, score FROM recommendation_results WHERE user_id = :uid AND model_type = 'RF-Optimized' ORDER BY `rank` ASC LIMIT :limit")
+        results = pd.read_sql(db_query, engine, params={"uid": str(user_id), "limit": top_n})
+        return results.to_dict(orient='records') if not results.empty else []
+    except:
         return []

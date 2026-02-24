@@ -98,6 +98,7 @@ def train_user_clusters(n_clusters=4):
             ]].copy()
 
             write_df.to_sql('usr_persona', con=conn, if_exists='append', index=False)
+            print("画像分析完成！")
 
         return True, "深度画像构建完成，所有字段已补齐。"
 

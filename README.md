@@ -59,3 +59,18 @@ pip config set global.index-url https://pypi.tuna.tsinghua.edu.cn/simple
 pip install -r requirements.txt
 # 启动后端
 python main.py
+
+# 清空旧的数据
+-- 1. 暂时关闭外键约束检查
+SET FOREIGN_KEY_CHECKS = 0;
+
+-- 2. 按照依赖关系顺序清空数据（重置自增ID）
+TRUNCATE TABLE model_metrics;
+TRUNCATE TABLE recommendation_results;
+TRUNCATE TABLE usr_persona;
+TRUNCATE TABLE fact_user_behavior;
+TRUNCATE TABLE dim_item;
+TRUNCATE TABLE dim_user;
+
+-- 3. 重新开启外键约束检查
+SET FOREIGN_KEY_CHECKS = 1;
