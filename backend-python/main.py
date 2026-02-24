@@ -1,6 +1,5 @@
 from fastapi import FastAPI, UploadFile, File, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
-import pandas as pd
 import os
 import time
 from pathlib import Path
@@ -22,7 +21,10 @@ from fastapi import FastAPI, BackgroundTasks
 from typing import Dict, Optional
 
 from sqlalchemy import text
+
+import pandas as pd
 from src.database import engine
+
 
 # 项目标题
 app = FastAPI(title="Smart-EComm-Strategy 智慧电商后端引擎")
@@ -445,6 +447,52 @@ async def get_user_recommend_final(user_id: str):
             return {"status": "success", "data": data}
     except Exception as e:
         return {"status": "error", "message": str(e)}
+
+@app.get("/api/model/kmeans_elbow")
+async def get_kmeans_elbow():
+    try:
+        # 核心修正：使用 AS 将数据库字段名重命名为前端需要的 k 和 sse
+        query = text("SELECT k_value AS k, sse_value AS sse FROM kmeans_metrics ORDER BY k_value ASC")
+        with engine.connect() as conn:
+            result = conn.execute(query)
+            # 转化为列表对象
+            data = [{"k": row.k, "sse": row.sse} for row in result]
+            return {"status": "success", "data": data}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+@app.get("/api/model/rf_sensitivity")
+async def get_rf_sensitivity():
+    """
+    读取真实的随机森林阈值敏感度趋势 (由 train_recommendation_model 生成)
+    """
+    try:
+        # 读取不同阈值下的精度、召回率和 F1 分数
+        query = """
+            SELECT threshold, precision_val as p, recall_val as r, f1_val as f 
+            FROM rf_sensitivity_metrics 
+            ORDER BY threshold ASC
+        """
+        df = pd.read_sql(query, engine)
+        if df.empty:
+            return {"status": "success", "data": []}
+        return {"status": "success", "data": df.to_dict(orient='records')}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+@app.get("/api/model/kmeans_process")
+async def get_kmeans_process():
+    # 调用 cluster_model.py 中的新函数
+    from src.profiling.cluster_model import get_kmeans_steps_data
+    return get_kmeans_steps_data(n_clusters=4)
+
+@app.post("/api/model/optimize")
+async def optimize_model_alias(background_tasks: BackgroundTasks, params: Optional[Dict] = None):
+    """
+    前端 ModelEvaluation.vue 调用的调优接口别名
+    """
+    # 直接转发给已有的重构逻辑
+    return await train_model(background_tasks, params)
 
 if __name__ == "__main__":
     import uvicorn

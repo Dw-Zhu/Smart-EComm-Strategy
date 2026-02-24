@@ -208,9 +208,9 @@ const getRecommendation = async () => {
   }
 }
 
-// 【新增核心修改】：页面加载时默认查询 U00000095
+// 【新增核心修改】：页面加载时默认查询 U00000015
 onMounted(() => {
-  userId.value = 'U00000095'
+  userId.value = 'U00000015'
   getRecommendation()
 })
 

@@ -10,7 +10,7 @@
 
       <el-col :span="12">
         <el-card shadow="hover">
-          <template #header>核心品类偏好排名</template>
+          <template #header>可预测且有转化潜力的核心用户</template>
           <div ref="barChartRef" class="chart-box"></div>
         </el-card>
       </el-col>

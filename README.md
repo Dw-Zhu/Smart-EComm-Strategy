@@ -71,6 +71,12 @@ TRUNCATE TABLE usr_persona;
 TRUNCATE TABLE fact_user_behavior;
 TRUNCATE TABLE dim_item;
 TRUNCATE TABLE dim_user;
+TRUNCATE TABLE kmeans_metrics;
+TRUNCATE TABLE rf_sensitivity_metrics;
 
 -- 3. 重新开启外键约束检查
 SET FOREIGN_KEY_CHECKS = 1;
+
+
+# 新增
+pip install scikit-learn

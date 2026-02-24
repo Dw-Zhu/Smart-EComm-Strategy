@@ -5,6 +5,38 @@ from sklearn.preprocessing import StandardScaler
 from src.database import engine
 from sqlalchemy import text
 
+# ==========================================================
+# 新增：生成 K-Means 迭代过程数据（专供前端 ECharts 使用）
+# ==========================================================
+def get_kmeans_steps_data(n_clusters=4):
+    try:
+        # 1. 提取绘图特征
+        query = "SELECT loyalty_score, price_sensitivity FROM usr_persona LIMIT 300"
+        df = pd.read_sql(query, engine)
+        if df.empty: return {"status": "error", "message": "数据为空"}
+        data = df[['loyalty_score', 'price_sensitivity']].values
+
+        steps_results = {"step0": data.tolist()}
+
+        # --- 核心改进：取消固定随机种子，并减少初始步数 ---
+        # Step 1: 仅迭代 1 次，且 init='random' 模拟最原始的随机分类状态
+        km_early = KMeans(n_clusters=n_clusters, init='random', max_iter=1, n_init=1, random_state=None)
+        labels_1 = km_early.fit_predict(data)
+        steps_results["step1"] = np.column_stack((data, labels_1)).tolist()
+
+        # Step 2: 迭代 2 次，观察质心微调过程
+        km_mid = KMeans(n_clusters=n_clusters, init='random', max_iter=2, n_init=1, random_state=None)
+        labels_2 = km_mid.fit_predict(data)
+        steps_results["step2"] = np.column_stack((data, labels_2)).tolist()
+
+        # Step 5: 增加迭代次数，确保达到收敛
+        km_final = KMeans(n_clusters=n_clusters, init='k-means++', max_iter=10, n_init=10, random_state=42)
+        labels_5 = km_final.fit_predict(data)
+        steps_results["step5"] = np.column_stack((data, labels_5)).tolist()
+
+        return {"status": "success", "data": steps_results}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
 
 def train_user_clusters(n_clusters=4):
     """

@@ -11,7 +11,7 @@
  Target Server Version : 90500 (9.5.0)
  File Encoding         : 65001
 
- Date: 12/02/2026 02:07:07
+ Date: 24/02/2026 18:25:42
 */
 
 SET NAMES utf8mb4;
@@ -77,7 +77,34 @@ CREATE TABLE `fact_user_behavior` (
   KEY `idx_user_item` (`user_id`,`item_id`),
   CONSTRAINT `fk_item` FOREIGN KEY (`item_id`) REFERENCES `dim_item` (`item_id`),
   CONSTRAINT `fk_user` FOREIGN KEY (`user_id`) REFERENCES `dim_user` (`user_id`)
-) ENGINE=InnoDB AUTO_INCREMENT=300 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='用户行为互动事实表';
+) ENGINE=InnoDB AUTO_INCREMENT=10002 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='用户行为互动事实表';
+
+-- ----------------------------
+-- Table structure for kmeans_metrics
+-- ----------------------------
+DROP TABLE IF EXISTS `kmeans_metrics`;
+CREATE TABLE `kmeans_metrics` (
+  `id` int NOT NULL AUTO_INCREMENT COMMENT '自增主键',
+  `k_value` int NOT NULL COMMENT '聚类数量 (K值)',
+  `sse_value` double NOT NULL COMMENT '误差平方和 (Sum of Squared Errors)',
+  `created_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP COMMENT '记录生成时间',
+  PRIMARY KEY (`id`),
+  KEY `idx_kmeans_k` (`k_value`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='用户画像聚类评估指标表';
+
+-- ----------------------------
+-- Table structure for model_metrics
+-- ----------------------------
+DROP TABLE IF EXISTS `model_metrics`;
+CREATE TABLE `model_metrics` (
+  `id` int NOT NULL AUTO_INCREMENT,
+  `model_type` varchar(50) NOT NULL COMMENT '模型类型',
+  `precision_val` float NOT NULL COMMENT '准确率 (Precision)',
+  `recall_val` float NOT NULL COMMENT '召回率 (Recall)',
+  `f1_val` float NOT NULL COMMENT 'F1值',
+  `test_date` timestamp NULL DEFAULT CURRENT_TIMESTAMP COMMENT '实验执行时间',
+  PRIMARY KEY (`id`)
+) ENGINE=InnoDB AUTO_INCREMENT=9 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='模型对比实验指标表';
 
 -- ----------------------------
 -- Table structure for recommendation_results
@@ -87,12 +114,30 @@ CREATE TABLE `recommendation_results` (
   `id` int NOT NULL AUTO_INCREMENT,
   `user_id` varchar(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci NOT NULL COMMENT '用户ID',
   `item_id` varchar(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci NOT NULL COMMENT '商品ID',
+  `model_type` varchar(50) DEFAULT 'RF-Optimized' COMMENT '模型类型: User-CF 或 RF-Optimized',
   `category` varchar(100) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci DEFAULT NULL COMMENT '商品品类',
   `score` float DEFAULT NULL COMMENT '预测购买得分 (0-1)',
+  `rank` int DEFAULT NULL COMMENT '推荐排序位置',
   `created_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (`id`),
-  KEY `idx_user` (`user_id`)
-) ENGINE=InnoDB AUTO_INCREMENT=2991 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+  KEY `idx_user` (`user_id`),
+  KEY `idx_user_model` (`user_id`,`model_type`)
+) ENGINE=InnoDB AUTO_INCREMENT=175793 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='推荐结果存储表';
+
+-- ----------------------------
+-- Table structure for rf_sensitivity_metrics
+-- ----------------------------
+DROP TABLE IF EXISTS `rf_sensitivity_metrics`;
+CREATE TABLE `rf_sensitivity_metrics` (
+  `id` int NOT NULL AUTO_INCREMENT COMMENT '自增主键',
+  `threshold` double NOT NULL COMMENT '分类概率阈值 (0.0 到 1.0)',
+  `precision_val` double NOT NULL COMMENT '对应阈值下的准确率',
+  `recall_val` double NOT NULL COMMENT '对应阈值下的召回率',
+  `f1_val` double NOT NULL COMMENT '对应阈值下的 F1 分数 (综合评价指标)',
+  `created_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP COMMENT '记录生成时间',
+  PRIMARY KEY (`id`),
+  KEY `idx_rf_threshold` (`threshold`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='随机森林模型阈值敏感度分析表';
 
 -- ----------------------------
 -- Table structure for usr_persona
